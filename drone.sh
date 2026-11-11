@@ -1,10 +1,11 @@
-
 #!/bin/bash
 
-set -e
+set -euo pipefail
+
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 
 echo "=================================="
-echo "   Drone GCS Setup and Launcher"
+echo "   Auto Drone GCS Setup and Launcher"
 echo "=================================="
 
 # Update package lists
@@ -32,8 +33,4 @@ pip install fastapi uvicorn pymavlink pyserial
 
 # Launch Drone GCS
 echo "[5/5] Starting Drone GCS..."
-python -m uvicorn launcher:app \
-    --app-dir drone-gcs \
-    --host 0.0.0.0 \
-    --port 8000
-
+exec bash drone-gcs/start_gcs.sh

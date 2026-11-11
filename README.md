@@ -177,8 +177,8 @@ python3 -m uvicorn launcher:app --app-dir drone-gcs --host 0.0.0.0 --port 8000
 
 Open `http://localhost:8000` (or your Pi's IP on port 8000), then select
 **Human & IR Landing**. The vision session stays alive when switching GCS sections;
-telemetry still uses the launcher's single active serial module. Ports 8000 and
-8001 must be reachable for the existing telemetry views.
+telemetry still uses the launcher's single active serial module. Only port 8000 needs to be reachable. Section pages and APIs are proxied
+through the launcher; port 8001 is internal to the Pi.
 
 Start with **IR simulation** to inspect Morse pulses and repeated confirmations.
 Simulation does not produce people or camera frames. For live capture select
@@ -199,3 +199,23 @@ transmission and touchdown remain unimplemented; the existing landing geometry
 must be calibrated and validated before a flight-control path can be developed.
 A confirmed Morse message does not command the aircraft. Stopped or stale sessions
 show unknown people/IR status and cannot retain a current beacon confirmation.
+
+
+### Updating the Raspberry Pi checkout
+
+Use the repository checkout rather than an older standalone `~/drone-gcs` copy:
+
+```sh
+cd /home/droneai/drone/autonomous-drone-landing-system
+git pull --ff-only origin main
+bash drone-gcs/start_gcs.sh
+```
+
+Stop the existing launcher first with Ctrl+C in its terminal. Open
+`http://<PI_IP>:8000` and hard refresh. The header must read **AUTO DRONE GCS**
+and the **Human & IR Landing** tab must appear. The startup script prints the
+exact directory it launches, and uses the project's `.venv` when available.
+For first-time setup, `bash drone.sh` installs dependencies and starts the UI.
+
+Web routing tests (without flight hardware): install `httpx` in the environment,
+then run `python -m unittest discover -s tests -v`.
