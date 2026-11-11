@@ -64,6 +64,7 @@ def start_child(name):
 async def lifespan(app):
     start_child('dashboard')
     yield
+    vision_service.stop()
     with lock:
         stop_child()
 
@@ -146,9 +147,9 @@ HTML = r'''<!doctype html><html><head><meta charset="utf-8"><meta name="viewport
 <span class="pill">Mode <b id="mode">--</b></span><span class="pill">Armed <b id="armed">--</b></span><span class="pill">Firmware <b id="fw">--</b></span><span class="pill">Battery <b id="bat">--</b></span><span class="pill">GPS <b id="gps">--</b></span><span class="pill">Section <b id="section">Dashboard</b></span>
 </div></header>
 <nav class="nav">
-<button data-name="dashboard" class="active">Dashboard</button><button data-name="calibration">Accelerometer / Compass</button><button data-name="radio">Radio Calibration</button><button data-name="parameters">Parameters & Safety</button><button data-name="firmware">Firmware</button><button data-name="frame">Frame Setup</button>
+<button data-name="dashboard" class="active">Dashboard</button><button data-name="vision">Human & IR Landing</button><button data-name="calibration">Accelerometer / Compass</button><button data-name="radio">Radio Calibration</button><button data-name="parameters">Parameters & Safety</button><button data-name="firmware">Firmware</button><button data-name="frame">Frame Setup</button>
 </nav><div class="hint" id="hint">Only one Pixhawk-connected service is active at a time. Switch sections using the navigation above.</div>
-<iframe id="view" title="Drone GCS section" src="http://192.168.0.2:8001/"></iframe>
+<iframe id="view" title="Drone GCS section"></iframe>
 <script>
 const frame=document.getElementById('view');let current='dashboard';
 frame.src=location.protocol+'//'+location.hostname+':8001/';
