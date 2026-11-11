@@ -154,9 +154,27 @@ HTML = r'''<!doctype html><html><head><meta charset="utf-8"><meta name="viewport
 <iframe id="view" title="Drone GCS section"></iframe>
 <script>
 const frame=document.getElementById('view');let current='dashboard';
-frame.src='/module/';
-document.querySelector('[data-name="vision"]').addEventListener('click',()=>{frame.src='/vision';document.getElementById('section').textContent='Human & IR Landing';document.getElementById('hint').textContent='Vision diagnostics run alongside the active telemetry module. Flight commands disabled.';document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.name==='vision'));});
-async function openSection(name){document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.name===name));document.getElementById('hint').textContent='Switching to '+name+'...';try{let r=await fetch('/api/open/'+name,{method:'POST'});let d=await r.json();if(!r.ok)throw Error(d.detail||'Could not open section');current=name;document.getElementById('section').textContent=name;frame.src=d.url;document.getElementById('hint').textContent='Active module: '+name+'. The previous module has been stopped to prevent competing MAVLink readers.';}catch(e){document.getElementById('hint').textContent=e.message;}}
+async function loadPanel(url){
+  frame.removeAttribute('src');
+  frame.srcdoc='<body style="background:#0b1220;color:#c6d4e6;font:16px system-ui;padding:24px">Loading section...</body>';
+  try{
+    const response=await fetch(url,{cache:'no-store',signal:AbortSignal.timeout(20000)});
+    if(!response.ok){let detail=await response.text();try{detail=JSON.parse(detail).detail||detail}catch(_){}throw Error('Section HTTP '+response.status+': '+detail)}
+    if(!(response.headers.get('content-type')||'').includes('text/html'))throw Error('The section returned data instead of an HTML page.');
+    frame.srcdoc=await response.text();
+  }catch(error){
+    const page=document.createElement('div');
+    page.style.cssText='background:#0b1220;color:#ffb5b5;font:16px system-ui;padding:24px;min-height:100vh';
+    const heading=document.createElement('h2');heading.textContent='Unable to load section';page.append(heading);
+    const detail=document.createElement('p');detail.textContent=error.message;page.append(detail);
+    const help=document.createElement('p');help.textContent='Check the server terminal, then select this section again to retry.';page.append(help);
+    frame.srcdoc='<!doctype html><html><body style="margin:0">'+page.outerHTML+'</body></html>';
+    document.getElementById('hint').textContent=error.message;
+  }
+}
+loadPanel('/module/');
+document.querySelector('[data-name="vision"]').addEventListener('click',()=>{loadPanel('/vision');document.getElementById('section').textContent='Human & IR Landing';document.getElementById('hint').textContent='Vision diagnostics run alongside the active telemetry module. Flight commands disabled.';document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.name==='vision'));});
+async function openSection(name){document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.name===name));document.getElementById('hint').textContent='Switching to '+name+'...';try{let r=await fetch('/api/open/'+name,{method:'POST'});let d=await r.json();if(!r.ok)throw Error(d.detail||'Could not open section');current=name;document.getElementById('section').textContent=name;await loadPanel(d.url);document.getElementById('hint').textContent='Active module: '+name+'. The previous module has been stopped to prevent competing MAVLink readers.';}catch(e){document.getElementById('hint').textContent=e.message;}}
 document.querySelectorAll('.nav button:not([data-name="vision"])').forEach(b=>b.addEventListener('click',()=>openSection(b.dataset.name)));
 async function refresh(){try{let d=await(await fetch('/api/active',{cache:'no-store'})).json();let connected=!!d.connected;let c=document.getElementById('conn');c.textContent=connected?'PIXHAWK CONNECTED':(current==='firmware'?'FIRMWARE MODE':'PIXHAWK DISCONNECTED');c.className=connected?'ok':'bad';document.getElementById('mode').textContent=d.mode||'--';document.getElementById('armed').textContent=d.armed?'ARMED':'DISARMED';document.getElementById('armed').className=d.armed?'bad':'ok';document.getElementById('fw').textContent=d.firmware||'--';document.getElementById('bat').textContent=d.battery==null?'N/A':d.battery+' V';document.getElementById('gps').textContent=d.gps_fix==null?'N/A':('Fix '+d.gps_fix+' / '+(d.satellites??0)+' sats');}catch(e){document.getElementById('conn').textContent='STATUS UNAVAILABLE'}}
 setInterval(refresh,1000);refresh();

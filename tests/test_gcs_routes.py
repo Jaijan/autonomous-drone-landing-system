@@ -55,7 +55,9 @@ class GCSRoutesTests(unittest.TestCase):
         result = self.client.get('/')
         self.assertEqual(result.status_code, 200)
         self.assertIn('AUTO DRONE GCS', result.text)
-        self.assertIn("frame.src='/module/'", result.text)
+        self.assertIn("loadPanel('/module/')", result.text)
+        self.assertIn('frame.srcdoc=await response.text()', result.text)
+        self.assertIn('Unable to load section', result.text)
         self.assertNotIn(':8001', result.text)
         self.assertIn('no-store', result.headers['cache-control'])
 
@@ -74,6 +76,22 @@ class GCSRoutesTests(unittest.TestCase):
     def test_vision_routes_not_forwarded(self):
         self.assertIn('Human & IR landing', self.client.get('/vision').text)
         self.assertIn('transmission_enabled', self.client.get('/api/vision/status').json())
+
+    def test_actual_dashboard_html_and_telemetry_route(self):
+        # Import the real child app without starting its serial-reading thread.
+        from types import SimpleNamespace
+        import importlib.util
+        module_path = Path(__file__).resolve().parents[1] / 'drone-gcs' / 'main.py'
+        spec = importlib.util.spec_from_file_location('gcs_dashboard_test', module_path)
+        dashboard = importlib.util.module_from_spec(spec)
+        with patch.dict(sys.modules, {'pymavlink': SimpleNamespace(mavutil=SimpleNamespace())}), patch('threading.Thread.start'):
+            spec.loader.exec_module(dashboard)
+        with TestClient(dashboard.app) as client:
+            page = client.get('/')
+            self.assertEqual(page.status_code, 200)
+            for label in ('ROLL', 'GYRO X Y Z', 'RC CHANNELS', "fetch('/api/status')"):
+                self.assertIn(label, page.text)
+            self.assertIn('roll', client.get('/api/status').json())
 
     def test_section_switch_returns_relative_url(self):
         with patch.object(self.launcher, 'start_child', return_value={'name': 'frame', 'path': '/'}):
