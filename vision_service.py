@@ -66,6 +66,8 @@ class VisionService:
             raise ValueError('Choose hog or yolo and confidence between 0 and 1')
         if model_path:
             model_path = str(Path(model_path).expanduser().resolve())
+        elif (Path(__file__).resolve().parent / 'yolo11n.pt').is_file():
+            model_path = str(Path(__file__).resolve().parent / 'yolo11n.pt')
         if mode != 'simulation' and human_backend == 'yolo' and (not model_path or not Path(model_path).is_file()):
             raise ValueError('Provide a local YOLO model path')
         settings = None
