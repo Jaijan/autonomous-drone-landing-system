@@ -55,7 +55,7 @@ class GCSRoutesTests(unittest.TestCase):
         result = self.client.get('/')
         self.assertEqual(result.status_code, 200)
         self.assertIn('AUTO DRONE GCS', result.text)
-        self.assertIn("loadPanel('/module/')", result.text)
+        self.assertIn("loadPanel('/base-station')", result.text)
         self.assertIn('frame.srcdoc=await response.text()', result.text)
         self.assertIn('Unable to load section', result.text)
         self.assertNotIn(':8001', result.text)
@@ -74,8 +74,22 @@ class GCSRoutesTests(unittest.TestCase):
         self.assertEqual(result.json(), {'frame_class': 1})
 
     def test_vision_routes_not_forwarded(self):
-        self.assertIn('Human & IR landing', self.client.get('/vision').text)
+        self.assertIn('Drone Base Station', self.client.get('/vision').text)
         self.assertIn('transmission_enabled', self.client.get('/api/vision/status').json())
+        self.assertIn('YOLO person detection', self.client.get('/base-station').text)
+
+    def test_combined_station_reuses_vehicle_status(self):
+        with patch.object(self.launcher, 'active_status', return_value={'connected': True, 'alt': 4.2}):
+            result = self.client.get('/api/base-station').json()
+        self.assertEqual(result['vehicle']['alt'], 4.2)
+        self.assertIn('events', result['vision'])
+
+    def test_yolo_missing_model_rejected(self):
+        result = self.client.post('/api/vision/start', json={
+            'mode': 'camera', 'message': 'SOS', 'unit': .1,
+            'human_backend': 'yolo', 'model_path': 'missing-model.pt'})
+        self.assertEqual(result.status_code, 400)
+        self.assertIn('model path', result.json()['detail'])
 
     def test_actual_dashboard_html_and_telemetry_route(self):
         # Import the real child app without starting its serial-reading thread.

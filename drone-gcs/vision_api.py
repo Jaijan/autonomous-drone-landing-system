@@ -19,9 +19,13 @@ class StartRequest(BaseModel):
     message: str
     unit: float
     camera_config: str | None = None
+    human_backend: str = 'hog'
+    model_path: str | None = None
+    confidence: float = .5
 
 
 @router.get('/vision', response_class=HTMLResponse)
+@router.get('/base-station', response_class=HTMLResponse)
 def page():
     return Path(__file__).with_name('vision.html').read_text(encoding='utf-8')
 

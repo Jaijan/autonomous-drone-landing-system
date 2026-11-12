@@ -219,3 +219,46 @@ For first-time setup, `bash drone.sh` installs dependencies and starts the UI.
 
 Web routing tests (without flight hardware): install `httpx` in the environment,
 then run `python -m unittest discover -s tests -v`.
+
+## Base Station: YOLO humans, IR and vehicle telemetry
+
+The launcher now opens **Base Station** by default. **Flight Dashboard** and
+calibration pages remain available. The station displays vehicle mode, battery,
+GPS and relative altitude from the existing GCS reader, alongside camera preview,
+person counts, IR signal/centroid, decoded Morse confirmations and recent events.
+`/base-station` opens the view directly; `/api/base-station` combines its status.
+
+Person detection is implemented locally in `human_detection.py` using the official
+Ultralytics inference API as a reference:
+https://github.com/ultralytics/ultralytics and
+https://docs.ultralytics.com/modes/predict/ . No external example application is
+copied or executed. YOLO filters classes by the name `person`. The existing HOG
+option remains available without downloading a model. HOG scores are not reported
+as probabilities. Detection uses one pending frame in a separate worker, so slow
+inference does not build a frame backlog or block Morse acquisition. Counts and
+boxes expire after two seconds from the frame submitted for inference.
+
+On the Pi, from the updated project root:
+
+```sh
+source .venv/bin/activate
+python -m pip install -r requirements-human.txt
+python -c "from ultralytics import YOLO; YOLO('yolo11n.pt')"
+bash drone-gcs/start_gcs.sh
+```
+
+The model command downloads weights and requires internet the first time. In the
+Base Station, select **OV5647 shared camera** and **YOLO person detection**. Enter
+the absolute path to `yolo11n.pt` in this project, plus the measured IR JSON,
+transmitter message and dot duration. Click **Start session**. Session settings
+are remembered in that browser. Use IR simulation first to test the web pipeline;
+simulation never claims person detections. Stop other programs using the camera.
+
+Install YOLO in the project environment rather than modifying the system Python.
+Runtime compatibility of PyTorch/Ultralytics with your Pi OS Python/architecture
+still needs checking on your Pi. Model/inference errors are shown in the human
+status and event list while IR capture continues. YOLO has not been evaluated on
+this camera, under IR illumination, or from aerial viewing angles. Counts are
+frame detections, not unique tracked people. Displayed recent boxes may lag the
+live image. Inference slower than two seconds is shown as stale/unknown; benchmark
+on the actual hardware before using it. No flight or landing commands are sent.

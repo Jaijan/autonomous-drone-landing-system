@@ -1,18 +1,83 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Human & IR landing</title>
+<title>Drone Base Station</title>
 <style>
 :root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;padding:24px;background:#0b1220;color:#e8eef8;font:15px system-ui}h1{font-size:25px;margin:0}p{color:#9cacc2}.layout{display:grid;grid-template-columns:2fr 1fr;gap:16px}.card{background:#172438;border:1px solid #2c405b;border-radius:12px;padding:20px;margin-top:16px}.feed{min-height:300px;display:grid;place-items:center;background:#080e19;border-radius:8px;overflow:hidden}.feed img{max-width:100%}.metrics{display:grid;grid-template-columns:1fr 1fr;gap:12px}.value{font-size:24px;color:#6cc9ff;margin:8px 0}label{display:block;color:#afc0d6;margin:12px 0 5px}input,select,button{font:inherit;background:#0c1728;color:white;border:1px solid #3a536f;padding:10px;border-radius:6px}input,select{width:100%}button{cursor:pointer;margin:14px 6px 0 0}button.primary{background:#2264b4}.blocked{color:#ffc574}#error{color:#ff8d9c;white-space:pre-wrap}small{color:#a9b7ca}@media(max-width:800px){.layout{grid-template-columns:1fr}}
 </style>
-<h1>Human detection & IR landing</h1>
+<h1>Drone Base Station</h1>
 <p>One camera stream · Person detection · Morse beacon identification</p>
 <div class="layout"><main><div class="card"><div class="feed"><img id="frame" alt="Annotated camera preview" hidden><p id="placeholder">Start a camera session to see the live feed.</p></div><p id="session">Idle</p></div>
-<div class="metrics"><div class="card">People detected<div class="value" id="humans">Unknown</div><small>Experimental HOG detector. A zero count does not prove a clear landing area.</small></div><div class="card">IR signal<div class="value" id="ir">Unknown</div><small id="quality">Quality: —</small></div><div class="card">Beacon message<div class="value" id="message">—</div><small id="validation">Waiting</small></div><div class="card">Landing readiness<p class="blocked" id="landing">BLOCKED: landing geometry unvalidated</p><small>Flight commands disabled. Beacon confirmation does not initiate landing.</small></div></div></main>
-<aside class="card"><h2>Session setup</h2><label for="mode">Source</label><select id="mode"><option value="simulation">IR simulation (no person detection)</option><option value="camera">OV5647 shared camera</option></select><label for="expected">Expected Morse message</label><input id="expected" value="SOS" pattern="[A-Z0-9]+"><label for="unit">Dot duration (seconds)</label><input id="unit" type="number" min="0.001" step="0.01" value="0.1"><label for="config">Measured camera JSON path (on server)</label><input id="config" placeholder="/home/pi/camera.json"><small>SOS / 0.1 are demo settings. Enter measured transmitter settings for camera mode. Stop other camera apps first.</small><div><button class="primary" id="start">Start session</button><button id="stop">Stop</button></div><p id="error" role="alert"></p><p>Simulation shows generated IR pulses only. Camera mode requires Picamera2 and a measured configuration.</p></aside></div>
+<div class="metrics"><div class="card">People detected<div class="value" id="humans">Unknown</div><small><span id="human-health">Detector waiting</span>. A zero count does not prove a clear landing area.</small></div><div class="card">IR signal<div class="value" id="ir">Unknown</div><small id="quality">Quality: —</small></div><div class="card">Beacon message<div class="value" id="message">—</div><small id="validation">Waiting</small></div><div class="card">Landing readiness<p class="blocked" id="landing">BLOCKED: landing geometry unvalidated</p><small>Flight commands disabled. Beacon confirmation does not initiate landing.</small></div></div></main>
+<aside class="card"><h2>Session setup</h2><label for="mode">Source</label><select id="mode"><option value="simulation">IR simulation (no person detection)</option><option value="camera">OV5647 shared camera</option></select><label for="backend">Human detector</label><select id="backend"><option value="yolo">YOLO person detection</option><option value="hog">OpenCV HOG (experimental fallback)</option></select>
+<label for="model">Local YOLO model path (on Pi)</label><input id="model" placeholder="/home/droneai/models/yolo11n.pt">
+<label for="confidence">YOLO confidence threshold</label><input id="confidence" type="number" value="0.5" min="0.01" max="1" step="0.05">
+<label for="expected">Expected Morse message</label><input id="expected" value="SOS" pattern="[A-Z0-9]+"><label for="unit">Dot duration (seconds)</label><input id="unit" type="number" min="0.001" step="0.01" value="0.1"><label for="config">Measured camera JSON path (on server)</label><input id="config" placeholder="/home/pi/camera.json"><small>SOS / 0.1 are demo settings. Enter measured transmitter settings for camera mode. Stop other camera apps first.</small><div><button class="primary" id="start">Start session</button><button id="stop">Stop</button></div><p id="error" role="alert"></p><p>Simulation shows generated IR pulses only. Camera mode requires Picamera2 and a measured configuration. YOLO also needs Ultralytics and a downloaded person-detection model. Human inference runs separately so it does not block IR capture. Recent boxes can lag the preview; they are detections, not tracked identities.</p><h2>Recent events</h2><ol id="events" aria-live="polite"><li>No events yet.</li></ol></aside></div>
 <script>
-const $=id=>document.getElementById(id);let polling=false;
-async function command(action){$('error').textContent='';try{let body={mode:$('mode').value,message:$('expected').value,unit:Number($('unit').value),camera_config:$('config').value||null};let r=await fetch('/api/vision/'+action,{method:'POST',headers:{'Content-Type':'application/json'},body:action==='start'?JSON.stringify(body):undefined});let d=await r.json();if(!r.ok)throw Error(typeof d.detail==='string'?d.detail:JSON.stringify(d.detail));await refresh();}catch(e){$('error').textContent=e.message}}
+const $=id=>document.getElementById(id);
+let polling=false;
+const fields=['mode','expected','unit','config','backend','model','confidence'];
+try{const saved=JSON.parse(localStorage.getItem('drone-session')||'null');if(saved)fields.forEach(id=>{if(saved[id]!=null)$(id).value=saved[id]});}catch(_){}
+function saveSettings(){try{localStorage.setItem('drone-session',JSON.stringify(Object.fromEntries(fields.map(id=>[id,$(id).value]))));}catch(_){}}
+async function command(action){
+  $('error').textContent='';saveSettings();
+  try{
+    const body={mode:$('mode').value,message:$('expected').value.trim().toUpperCase(),unit:Number($('unit').value),camera_config:$('config').value.trim()||null,human_backend:$('backend').value,model_path:$('model').value.trim()||null,confidence:Number($('confidence').value)};
+    const r=await fetch('/api/vision/'+action,{method:'POST',headers:{'Content-Type':'application/json'},body:action==='start'?JSON.stringify(body):undefined});
+    const d=await r.json();
+    if(!r.ok)throw Error(typeof d.detail==='string'?d.detail:JSON.stringify(d.detail));
+    await refresh();
+  }catch(e){$('error').textContent=e.message;}
+}
 $('start').onclick=()=>command('start');$('stop').onclick=()=>command('stop');
-async function refresh(){if(polling)return;polling=true;try{let r=await fetch('/api/vision/status',{cache:'no-store'});if(!r.ok)throw Error('Status unavailable');let d=await r.json();$('start').disabled=d.running;$('stop').disabled=!d.running;$('session').textContent=d.source+' · '+(d.running?(d.fresh?'Receiving':'Waiting for fresh observations'):'Stopped')+(d.age_seconds==null?'':' · last observation '+d.age_seconds.toFixed(1)+'s ago');$('humans').textContent=d.humans==null?'Unknown':d.humans;$('ir').textContent=d.ir_state===null?'Unknown':(d.ir_state?'ON':'OFF');$('quality').textContent='Quality: '+d.quality;$('message').textContent=d.message||'—';$('validation').textContent=d.validation+' · confirmations '+d.confirmations+(d.beacon_confirmed?' · confirmed':'');$('landing').textContent=d.landing;if(d.error)$('error').textContent=d.error;if(d.fresh&&d.source==='camera'){let image=await fetch('/api/vision/frame',{cache:'no-store'});if(image.status===200){let url=URL.createObjectURL(await image.blob());let old=$('frame').src;$('frame').src=url;if(old.startsWith('blob:'))URL.revokeObjectURL(old);$('frame').hidden=false;$('placeholder').hidden=true;}else{$('frame').hidden=true;$('placeholder').hidden=false;}}else{$('frame').hidden=true;$('placeholder').hidden=false;$('placeholder').textContent=d.source==='simulation'?'Simulation: generated IR observations, no camera or human detections.':'Camera preview unavailable.';}}catch(e){$('session').textContent='Connection lost';$('humans').textContent='Unknown';$('ir').textContent='Unknown';$('frame').hidden=true;$('placeholder').hidden=false;$('error').textContent=e.message;}finally{polling=false}}
+function vehicle(v){
+  const live=!!v.connected&&!v.status_error;
+  $('vehicle-connection').textContent=live?'PIXHAWK CONNECTED':'PIXHAWK DISCONNECTED / UNAVAILABLE';
+  $('vehicle-mode').textContent=live?(v.mode||'Unknown'):'?';
+  $('vehicle-armed').textContent=live?(v.armed?'ARMED':'DISARMED'):'Unknown';
+  $('vehicle-battery').textContent=live&&v.battery!=null?v.battery+' V':'?';
+  $('vehicle-alt').textContent=live&&v.alt!=null?v.alt+' m':'?';
+  $('vehicle-gps').textContent=live&&v.gps_fix!=null?'Fix '+v.gps_fix+' / '+(v.satellites??0)+' satellites':'Unknown';
+  $('vehicle-position').textContent=live&&v.lat!=null&&v.lon!=null?v.lat+', '+v.lon:'Unknown';
+  $('vehicle-note').textContent=v.status_error||v.error||(v.active==='dashboard'?'Live flight dashboard telemetry.':'Active module: '+(v.active||'none')+'. Select Flight Dashboard for full telemetry.');
+}
+function events(rows){
+  $('events').replaceChildren();
+  for(const row of rows.slice(0,15)){
+    const li=document.createElement('li');li.textContent=new Date(row.time*1000).toLocaleTimeString()+' ? '+row.detail;$('events').append(li);
+  }
+  if(!rows.length){const li=document.createElement('li');li.textContent='No events yet.';$('events').append(li);}
+}
+function hideFrame(message){$('frame').hidden=true;$('placeholder').hidden=false;$('placeholder').textContent=message;}
+async function refresh(){
+  if(polling)return;polling=true;
+  try{
+    const r=await fetch('/api/base-station',{cache:'no-store'});
+    if(!r.ok)throw Error('Base station status unavailable');
+    const station=await r.json(),d=station.vision;vehicle(station.vehicle);events(d.events||[]);
+    $('start').disabled=d.running;$('stop').disabled=!d.running;
+    $('session').textContent=d.source+' ? '+(d.running?(d.fresh?'Receiving':'Waiting for fresh observations'):'Stopped')+' ? '+d.frames+' frames'+(d.age_seconds==null?'':' ? observation '+d.age_seconds.toFixed(1)+'s ago');
+    $('humans').textContent=d.humans==null?'Unknown':d.humans;
+    $('human-health').textContent=d.human_error||(d.human_detector+' ? '+(d.human_fresh?'receiving':'waiting / stale'));
+    $('ir').textContent=d.ir_state===null?'Unknown':(d.ir_state?'ON':'OFF');
+    $('quality').textContent='Quality: '+d.quality+(d.centroid?' ? target '+d.centroid.map(n=>n.toFixed(0)).join(', '):'');
+    $('message').textContent=d.message||'?';
+    $('validation').textContent=d.validation+' ? confirmations '+d.confirmations+(d.beacon_confirmed?' ? confirmed':'');
+    $('landing').textContent=d.landing;
+    if(d.error)$('error').textContent=d.error;
+    if(d.fresh&&d.source==='camera'){
+      const image=await fetch('/api/vision/frame',{cache:'no-store'});
+      if(image.status===200){
+        const url=URL.createObjectURL(await image.blob()),old=$('frame').src;
+        $('frame').src=url;if(old.startsWith('blob:'))URL.revokeObjectURL(old);
+        $('frame').hidden=false;$('placeholder').hidden=true;
+      }else hideFrame('Waiting for a fresh camera frame.');
+    }else hideFrame(d.source==='simulation'?'Simulation: generated IR observations. No camera or person detections.':'Start a camera session to see live detections.');
+  }catch(e){
+    vehicle({});$('session').textContent='Connection lost';$('humans').textContent='Unknown';$('ir').textContent='Unknown';
+    $('quality').textContent='Quality: unavailable';$('validation').textContent='Current confirmation unavailable';
+    $('landing').textContent='BLOCKED: base station connection lost';
+    hideFrame('Camera connection unavailable.');$('error').textContent=e.message;
+  }finally{polling=false;}
+}
 setInterval(refresh,500);refresh();
 </script></html>

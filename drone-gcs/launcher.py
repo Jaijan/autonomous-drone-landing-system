@@ -112,6 +112,12 @@ def stop_active():
     return {'success': True}
 
 
+@app.get('/api/base-station')
+def base_station_status():
+    # Reuse the active GCS module: never open a second MAVLink reader.
+    return {'vehicle': active_status(), 'vision': vision_service.snapshot()}
+
+
 def forward_section(path, query, method, body, content_type):
     """Keep embedded pages and their absolute API calls on the launcher's origin."""
     url = f'http://127.0.0.1:{CHILD_PORT}/' + path
@@ -146,10 +152,10 @@ HTML = r'''<!doctype html><html><head><meta charset="utf-8"><meta name="viewport
 :root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;background:#080e19;color:#e8eef8;font:14px system-ui,Arial}.dock{position:sticky;top:0;z-index:10;background:#111d2d;border-bottom:1px solid #2b3c54;padding:10px 16px;box-shadow:0 4px 16px #0006}.brand{font-weight:800;letter-spacing:.08em;color:#7db5ff;margin-right:18px}.stats{display:flex;gap:9px;flex-wrap:wrap;margin-top:8px}.pill{background:#1c2b40;border:1px solid #344760;border-radius:8px;padding:7px 10px;color:#c6d4e6}.pill b{color:#fff;margin-left:4px}.ok{color:#48dfa5!important}.bad{color:#ff7788!important}.nav{display:flex;gap:7px;flex-wrap:wrap;padding:12px 16px;background:#0d1726;border-bottom:1px solid #26374e}.nav button{background:#1a2a40;border:1px solid #344a66;color:#dce8f7;padding:9px 12px;border-radius:8px;cursor:pointer}.nav button.active{background:#2862a8;border-color:#4b91e7;color:white}iframe{display:block;width:100%;height:calc(100vh - 148px);min-height:600px;border:0;background:#0b1220}.hint{padding:10px 16px;color:#91a4bc;font-size:12px}@media(max-width:600px){iframe{height:calc(100vh - 220px);min-height:650px}.dock{padding:9px}.pill{padding:6px 8px}}
 </style></head><body>
 <header class="dock"><span class="brand">AUTO DRONE GCS</span><span id="conn" class="bad">CONNECTING</span><div class="stats">
-<span class="pill">Mode <b id="mode">--</b></span><span class="pill">Armed <b id="armed">--</b></span><span class="pill">Firmware <b id="fw">--</b></span><span class="pill">Battery <b id="bat">--</b></span><span class="pill">GPS <b id="gps">--</b></span><span class="pill">Section <b id="section">Dashboard</b></span>
+<span class="pill">Mode <b id="mode">--</b></span><span class="pill">Armed <b id="armed">--</b></span><span class="pill">Firmware <b id="fw">--</b></span><span class="pill">Battery <b id="bat">--</b></span><span class="pill">GPS <b id="gps">--</b></span><span class="pill">Section <b id="section">Base Station</b></span>
 </div></header>
 <nav class="nav">
-<button data-name="dashboard" class="active">Dashboard</button><button data-name="vision">Human & IR Landing</button><button data-name="calibration">Accelerometer / Compass</button><button data-name="radio">Radio Calibration</button><button data-name="parameters">Parameters & Safety</button><button data-name="firmware">Firmware</button><button data-name="frame">Frame Setup</button>
+<button data-name="vision" class="active">Base Station</button><button data-name="dashboard">Flight Dashboard</button><button data-name="calibration">Accelerometer / Compass</button><button data-name="radio">Radio Calibration</button><button data-name="parameters">Parameters & Safety</button><button data-name="firmware">Firmware</button><button data-name="frame">Frame Setup</button>
 </nav><div class="hint" id="hint">Only one Pixhawk-connected service is active at a time. Switch sections using the navigation above.</div>
 <iframe id="view" title="Drone GCS section"></iframe>
 <script>
@@ -172,8 +178,8 @@ async function loadPanel(url){
     document.getElementById('hint').textContent=error.message;
   }
 }
-loadPanel('/module/');
-document.querySelector('[data-name="vision"]').addEventListener('click',()=>{loadPanel('/vision');document.getElementById('section').textContent='Human & IR Landing';document.getElementById('hint').textContent='Vision diagnostics run alongside the active telemetry module. Flight commands disabled.';document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.name==='vision'));});
+loadPanel('/base-station');
+document.querySelector('[data-name="vision"]').addEventListener('click',()=>{loadPanel('/base-station');document.getElementById('section').textContent='Base Station';document.getElementById('hint').textContent='Vision diagnostics run alongside the active telemetry module. Flight commands disabled.';document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.name==='vision'));});
 async function openSection(name){document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.name===name));document.getElementById('hint').textContent='Switching to '+name+'...';try{let r=await fetch('/api/open/'+name,{method:'POST'});let d=await r.json();if(!r.ok)throw Error(d.detail||'Could not open section');current=name;document.getElementById('section').textContent=name;await loadPanel(d.url);document.getElementById('hint').textContent='Active module: '+name+'. The previous module has been stopped to prevent competing MAVLink readers.';}catch(e){document.getElementById('hint').textContent=e.message;}}
 document.querySelectorAll('.nav button:not([data-name="vision"])').forEach(b=>b.addEventListener('click',()=>openSection(b.dataset.name)));
 async function refresh(){try{let d=await(await fetch('/api/active',{cache:'no-store'})).json();let connected=!!d.connected;let c=document.getElementById('conn');c.textContent=connected?'PIXHAWK CONNECTED':(current==='firmware'?'FIRMWARE MODE':'PIXHAWK DISCONNECTED');c.className=connected?'ok':'bad';document.getElementById('mode').textContent=d.mode||'--';document.getElementById('armed').textContent=d.armed?'ARMED':'DISARMED';document.getElementById('armed').className=d.armed?'bad':'ok';document.getElementById('fw').textContent=d.firmware||'--';document.getElementById('bat').textContent=d.battery==null?'N/A':d.battery+' V';document.getElementById('gps').textContent=d.gps_fix==null?'N/A':('Fix '+d.gps_fix+' / '+(d.satellites??0)+' sats');}catch(e){document.getElementById('conn').textContent='STATUS UNAVAILABLE'}}

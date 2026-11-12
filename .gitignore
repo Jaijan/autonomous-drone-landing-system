@@ -2,3 +2,5 @@ __pycache__/
 *.pyc
 ir_events.log
 .venv/
+dist/
+*.pt
