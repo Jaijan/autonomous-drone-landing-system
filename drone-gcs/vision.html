@@ -6,17 +6,36 @@
 </style>
 <h1>Drone Base Station</h1>
 <p>One camera stream · Person detection · Morse beacon identification</p>
+<section class="card" aria-label="Vehicle telemetry">
+  <strong id="vehicle-connection">Vehicle status unavailable</strong>
+  <div class="metrics">
+    <div>Flight mode<div class="value" id="vehicle-mode">Unknown</div></div>
+    <div>Armed<div class="value" id="vehicle-armed">Unknown</div></div>
+    <div>Battery<div class="value" id="vehicle-battery">Unavailable</div></div>
+    <div>Relative altitude<div class="value" id="vehicle-alt">Unavailable</div></div>
+    <div>GPS<p id="vehicle-gps">Unknown</p></div>
+    <div>Vehicle position<p id="vehicle-position">Unknown</p></div>
+  </div>
+  <small id="vehicle-note">Waiting for vehicle telemetry.</small>
+</section>
 <div class="layout"><main><div class="card"><div class="feed"><img id="frame" alt="Annotated camera preview" hidden><p id="placeholder">Start a camera session to see the live feed.</p></div><p id="session">Idle</p></div>
 <div class="metrics"><div class="card">People detected<div class="value" id="humans">Unknown</div><small><span id="human-health">Detector waiting</span>. A zero count does not prove a clear landing area.</small></div><div class="card">IR signal<div class="value" id="ir">Unknown</div><small id="quality">Quality: —</small></div><div class="card">Beacon message<div class="value" id="message">—</div><small id="validation">Waiting</small></div><div class="card">Landing readiness<p class="blocked" id="landing">BLOCKED: landing geometry unvalidated</p><small>Flight commands disabled. Beacon confirmation does not initiate landing.</small></div></div></main>
-<aside class="card"><h2>Session setup</h2><label for="mode">Source</label><select id="mode"><option value="simulation">IR simulation (no person detection)</option><option value="camera">OV5647 shared camera</option></select><label for="backend">Human detector</label><select id="backend"><option value="yolo">YOLO person detection</option><option value="hog">OpenCV HOG (experimental fallback)</option></select>
+<aside class="card"><h2>Session setup</h2><p id="error" role="alert"></p><label for="mode">Source</label><select id="mode"><option value="human-camera">Live human detection (automatic camera settings)</option><option value="simulation">IR simulation (no person detection)</option><option value="camera">OV5647 shared camera</option></select><label for="backend">Human detector</label><select id="backend"><option value="yolo">YOLO person detection</option><option value="hog">OpenCV HOG (experimental fallback)</option></select>
 <label for="model">Local YOLO model path (on Pi)</label><input id="model" placeholder="/home/droneai/models/yolo11n.pt">
 <label for="confidence">YOLO confidence threshold</label><input id="confidence" type="number" value="0.5" min="0.01" max="1" step="0.05">
-<label for="expected">Expected Morse message</label><input id="expected" value="SOS" pattern="[A-Z0-9]+"><label for="unit">Dot duration (seconds)</label><input id="unit" type="number" min="0.001" step="0.01" value="0.1"><label for="config">Measured camera JSON path (on server)</label><input id="config" placeholder="/home/pi/camera.json"><small>SOS / 0.1 are demo settings. Enter measured transmitter settings for camera mode. Stop other camera apps first.</small><div><button class="primary" id="start">Start session</button><button id="stop">Stop</button></div><p id="error" role="alert"></p><p>Simulation shows generated IR pulses only. Camera mode requires Picamera2 and a measured configuration. YOLO also needs Ultralytics and a downloaded person-detection model. Human inference runs separately so it does not block IR capture. Recent boxes can lag the preview; they are detections, not tracked identities.</p><h2>Recent events</h2><ol id="events" aria-live="polite"><li>No events yet.</li></ol></aside></div>
+<label for="expected">Expected Morse message</label><input id="expected" value="SOS" pattern="[A-Z0-9]+"><label for="unit">Dot duration (seconds)</label><input id="unit" type="number" min="0.001" step="0.01" value="0.1"><label for="config">Measured camera JSON path (on server)</label><input id="config" placeholder="/home/pi/camera.json"><small>Live human detection uses automatic exposure and requires only the model path. Shared IR mode requires a completed measured camera JSON. SOS / 0.1 are demo settings. Enter measured transmitter settings for camera mode. Stop other camera apps first.</small><div><button class="primary" id="start">Start session</button><button id="stop">Stop</button></div><p>Simulation shows generated IR pulses only. Camera mode requires Picamera2 and a measured configuration. YOLO also needs Ultralytics and a downloaded person-detection model. Human inference runs separately so it does not block IR capture. Recent boxes can lag the preview; they are detections, not tracked identities.</p><h2>Recent events</h2><ol id="events" aria-live="polite"><li>No events yet.</li></ol></aside></div>
 <script>
 const $=id=>document.getElementById(id);
 let polling=false;
 const fields=['mode','expected','unit','config','backend','model','confidence'];
 try{const saved=JSON.parse(localStorage.getItem('drone-session')||'null');if(saved)fields.forEach(id=>{if(saved[id]!=null)$(id).value=saved[id]});}catch(_){}
+function updateMode(){
+  const ir=$('mode').value!=='human-camera';
+  ['expected','unit','config'].forEach(id=>$(id).disabled=!ir);
+  $('model').disabled=$('backend').value!=='yolo';
+  $('confidence').disabled=$('backend').value!=='yolo';
+}
+$('mode').onchange=updateMode;$('backend').onchange=updateMode;updateMode();
 function saveSettings(){try{localStorage.setItem('drone-session',JSON.stringify(Object.fromEntries(fields.map(id=>[id,$(id).value]))));}catch(_){}}
 async function command(action){
   $('error').textContent='';saveSettings();
@@ -26,7 +45,7 @@ async function command(action){
     const d=await r.json();
     if(!r.ok)throw Error(typeof d.detail==='string'?d.detail:JSON.stringify(d.detail));
     await refresh();
-  }catch(e){$('error').textContent=e.message;}
+  }catch(e){$('error').textContent=e.message;$('error').scrollIntoView({block:'center'});}
 }
 $('start').onclick=()=>command('start');$('stop').onclick=()=>command('stop');
 function vehicle(v){
@@ -58,13 +77,13 @@ async function refresh(){
     $('session').textContent=d.source+' ? '+(d.running?(d.fresh?'Receiving':'Waiting for fresh observations'):'Stopped')+' ? '+d.frames+' frames'+(d.age_seconds==null?'':' ? observation '+d.age_seconds.toFixed(1)+'s ago');
     $('humans').textContent=d.humans==null?'Unknown':d.humans;
     $('human-health').textContent=d.human_error||(d.human_detector+' ? '+(d.human_fresh?'receiving':'waiting / stale'));
-    $('ir').textContent=d.ir_state===null?'Unknown':(d.ir_state?'ON':'OFF');
+    $('ir').textContent=d.source==='human-camera'?'Disabled in human camera mode':(d.ir_state===null?'Unknown':(d.ir_state?'ON':'OFF'));
     $('quality').textContent='Quality: '+d.quality+(d.centroid?' ? target '+d.centroid.map(n=>n.toFixed(0)).join(', '):'');
     $('message').textContent=d.message||'?';
     $('validation').textContent=d.validation+' ? confirmations '+d.confirmations+(d.beacon_confirmed?' ? confirmed':'');
     $('landing').textContent=d.landing;
     if(d.error)$('error').textContent=d.error;
-    if(d.fresh&&d.source==='camera'){
+    if(d.fresh&&['camera','human-camera'].includes(d.source)){
       const image=await fetch('/api/vision/frame',{cache:'no-store'});
       if(image.status===200){
         const url=URL.createObjectURL(await image.blob()),old=$('frame').src;

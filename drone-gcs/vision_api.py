@@ -27,7 +27,8 @@ class StartRequest(BaseModel):
 @router.get('/vision', response_class=HTMLResponse)
 @router.get('/base-station', response_class=HTMLResponse)
 def page():
-    return Path(__file__).with_name('vision.html').read_text(encoding='utf-8')
+    html = Path(__file__).with_name('vision.html').read_text(encoding='utf-8')
+    return HTMLResponse(html, headers={'Cache-Control': 'no-store'})
 
 
 @router.get('/api/vision/status')

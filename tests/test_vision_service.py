@@ -2,6 +2,8 @@ import time
 import sys
 from types import SimpleNamespace
 import unittest
+import tempfile
+from pathlib import Path
 from unittest.mock import patch
 
 from config import Protocol
@@ -9,6 +11,16 @@ from vision_service import VisionService
 
 
 class VisionTests(unittest.TestCase):
+    def test_unfilled_ir_config_rejected_before_camera_thread(self):
+        service = VisionService()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'camera.json'
+            template = Path(__file__).resolve().parents[1] / 'camera_config.template.json'
+            path.write_text(template.read_text())
+            with self.assertRaisesRegex(ValueError, 'positive measured value'):
+                service.start('camera', 'SOS', .1, str(path))
+        self.assertIsNone(service.thread)
+
     def test_simulation_decodes_without_camera_or_people(self):
         service = VisionService()
         with patch.object(service.stop_event, 'wait', return_value=False):

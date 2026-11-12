@@ -60,17 +60,21 @@ class VisionService:
         if not math.isfinite(unit):
             raise ValueError('Dot duration must be finite')
         protocol = Protocol(message, unit)
-        if mode not in ('simulation', 'camera'):
-            raise ValueError('Choose simulation or camera')
+        if mode not in ('simulation', 'camera', 'human-camera'):
+            raise ValueError('Choose simulation, camera or human-camera')
         if human_backend not in ('hog', 'yolo') or not math.isfinite(confidence) or not 0 < confidence <= 1:
             raise ValueError('Choose hog or yolo and confidence between 0 and 1')
-        if mode == 'camera' and human_backend == 'yolo' and (not model_path or not Path(model_path).is_file()):
+        if model_path:
+            model_path = str(Path(model_path).expanduser().resolve())
+        if mode != 'simulation' and human_backend == 'yolo' and (not model_path or not Path(model_path).is_file()):
             raise ValueError('Provide a local YOLO model path')
         settings = None
         if mode == 'camera':
             if not camera_config:
                 raise ValueError('Provide a measured camera configuration file')
-            settings = json.loads(Path(camera_config).read_text())
+            settings = json.loads(Path(camera_config).expanduser().read_text())
+            from ir.ir_camera_receiver import validate_settings
+            validate_settings(settings)
         with self.lock:
             if self.thread and self.thread.is_alive():
                 raise ValueError('Stop the current session before starting another')
@@ -131,7 +135,8 @@ class VisionService:
                                          boxes=[[int(v) for v in box] for box in boxes],
                                          frames=self.data['frames'] + 1)
 
-                source = receive(settings, on_frame=on_frame, stop_event=self.stop_event, preview=False)
+                source = receive(settings, on_frame=on_frame, stop_event=self.stop_event,
+                                 preview=False, human_only=mode == 'human-camera')
             previous = None
             for timestamp, state, quality in source:
                 if mode == 'simulation' and previous is not None:

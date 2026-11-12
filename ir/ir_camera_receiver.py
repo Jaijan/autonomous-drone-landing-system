@@ -8,9 +8,9 @@ REQUIRED = ('size', 'exposure_us', 'gain', 'max_frame_gap', 'brightness_threshol
             'max_motion_pixels', 'intensity_percentile', 'on_contrast', 'off_contrast',
             'max_off_seconds', 'history_size', 'exposure_tolerance')
 
-def receive(settings, *, on_frame=None, stop_event=None, preview=True):
-    import cv2
-    from picamera2 import Picamera2
+def validate_settings(settings):
+    if not isinstance(settings, dict):
+        raise ValueError("Camera configuration must be a JSON object")
     missing = set(REQUIRED) - settings.keys()
     if missing:
         raise ValueError('Missing measured camera settings: ' + ', '.join(sorted(missing)))
@@ -23,6 +23,14 @@ def receive(settings, *, on_frame=None, stop_event=None, preview=True):
         raise ValueError('Invalid history size or percentile')
     if settings['off_contrast'] >= settings['on_contrast']:
         raise ValueError('OFF contrast must be below ON contrast')
+
+def receive(settings, *, on_frame=None, stop_event=None, preview=True, human_only=False):
+    import cv2
+    from picamera2 import Picamera2
+    if human_only:
+        settings = {'size': [640, 480]}
+    else:
+        validate_settings(settings)
     cameras = Picamera2.global_camera_info()
     logging.info('Camera enumeration: %r', cameras)
     if len(cameras) != 1 or 'ov5647' not in str(cameras[0]).lower():
@@ -32,13 +40,14 @@ def receive(settings, *, on_frame=None, stop_event=None, preview=True):
     previous = None
     try:
         camera.configure(camera.create_video_configuration(main={'size': tuple(settings['size']), 'format': 'RGB888'}))
-        for control in ('AeEnable', 'ExposureTime', 'AnalogueGain'):
-            if control not in camera.camera_controls:
-                raise RuntimeError('Unsupported camera control: ' + control)
-        camera.set_controls({'AeEnable': False, 'ExposureTime': settings['exposure_us'], 'AnalogueGain': settings['gain']})
+        if not human_only:
+            for control in ('AeEnable', 'ExposureTime', 'AnalogueGain'):
+                if control not in camera.camera_controls:
+                    raise RuntimeError('Unsupported camera control: ' + control)
+            camera.set_controls({'AeEnable': False, 'ExposureTime': settings['exposure_us'], 'AnalogueGain': settings['gain']})
         camera.start()
         started = True
-        detector, previous = IRDetector(settings), None
+        detector, previous = (None if human_only else IRDetector(settings)), None
         while stop_event is None or not stop_event.is_set():
             request = camera.capture_request()
             try:
@@ -47,16 +56,19 @@ def receive(settings, *, on_frame=None, stop_event=None, preview=True):
                 request.release()
             # Sensor timestamp is tied to capture rather than processing speed.
             now = metadata['SensorTimestamp'] / 1e9
-            exposure = metadata.get('ExposureTime')
-            gain = metadata.get('AnalogueGain')
-            stable = (exposure is not None and gain is not None and
-                      abs(exposure/settings['exposure_us']-1) <= settings['exposure_tolerance'] and
-                      abs(gain/settings['gain']-1) <= settings['exposure_tolerance'])
-            if not stable or (previous is not None and now-previous > settings['max_frame_gap']):
-                detector = IRDetector(settings)
-                observation = detector.result(None, 0, 0, False)
+            if human_only:
+                observation = {'state': None, 'quality': 0, 'centroid': None}
             else:
-                observation = detector.process(frame, now)
+                exposure = metadata.get('ExposureTime')
+                gain = metadata.get('AnalogueGain')
+                stable = (exposure is not None and gain is not None and
+                          abs(exposure/settings['exposure_us']-1) <= settings['exposure_tolerance'] and
+                          abs(gain/settings['gain']-1) <= settings['exposure_tolerance'])
+                if not stable or (previous is not None and now-previous > settings['max_frame_gap']):
+                    detector = IRDetector(settings)
+                    observation = detector.result(None, 0, 0, False)
+                else:
+                    observation = detector.process(frame, now)
             previous = now
             logging.info('Camera observation: %r metadata: %r', observation, metadata)
             if on_frame is not None:
