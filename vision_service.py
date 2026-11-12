@@ -72,7 +72,22 @@ class VisionService:
         if mode == 'camera':
             if not camera_config:
                 raise ValueError('Provide a measured camera configuration file')
-            settings = json.loads(Path(camera_config).expanduser().read_text())
+            config_path = Path(camera_config).expanduser().resolve()
+            try:
+                config_text = config_path.read_text(encoding='utf-8-sig')
+            except UnicodeDecodeError as exc:
+                raise ValueError(
+                    f'Camera config {config_path} is not UTF-8 JSON. '
+                    'Select your measured camera.json in the camera-config field. '
+                    'Enter yolo11n.pt in the YOLO model field.'
+                ) from exc
+            try:
+                settings = json.loads(config_text)
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    f'Camera config {config_path} contains invalid JSON '
+                    f'at line {exc.lineno}, column {exc.colno}: {exc.msg}'
+                ) from exc
             from ir.ir_camera_receiver import validate_settings
             validate_settings(settings)
         with self.lock:

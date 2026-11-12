@@ -11,6 +11,15 @@ from vision_service import VisionService
 
 
 class VisionTests(unittest.TestCase):
+    def test_binary_model_in_config_field_reports_which_path_failed(self):
+        service = VisionService()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'yolo11n.pt'
+            path.write_bytes(b'PK' + b'\0' * 62 + b'\x80')
+            with self.assertRaisesRegex(ValueError, 'yolo11n.pt.*not UTF-8 JSON'):
+                service.start('camera', 'SOS', .1, str(path))
+        self.assertIsNone(service.thread)
+
     def test_unfilled_ir_config_rejected_before_camera_thread(self):
         service = VisionService()
         with tempfile.TemporaryDirectory() as directory:
