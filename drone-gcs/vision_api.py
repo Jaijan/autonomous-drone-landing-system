@@ -23,6 +23,7 @@ class StartRequest(BaseModel):
     human_backend: str = 'hog'
     model_path: str | None = None
     confidence: float = .5
+    signal_protocol: str = 'morse'
 
 
 @router.get('/vision', response_class=HTMLResponse)

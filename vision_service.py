@@ -11,6 +11,7 @@ from config import Protocol
 from ir.morse_decoder import MorseDecoder
 from ir.signal_validator import SignalValidator
 from ir.simulation import simulate
+from ir.blink_decoder import BlinkDecoder, simulate_blink
 from human_detection import PersonWorker
 
 
@@ -29,7 +30,7 @@ class VisionService:
                          validation='waiting', confirmations=0, beacon_confirmed=False,
                          landing='BLOCKED: landing geometry unvalidated',
                          transmission_enabled=False, boxes=[], frames=0,
-                         human_updated=None, human_error=None)
+                         human_updated=None, human_error=None, signal_protocol='morse', request='waiting')
         self.events = deque(maxlen=100)
         self.jpeg = None
 
@@ -54,9 +55,15 @@ class VisionService:
             result.update(humans=None, ir_state=None, quality=0, centroid=None,
                           beacon_confirmed=False, boxes=[])
             result['landing'] = 'BLOCKED: camera observations missing or stale'
+        if not result['beacon_confirmed']:
+            result['request'] = 'waiting for current beacon confirmation'
         return result
 
-    def start(self, mode, message, unit, camera_config=None, human_backend='hog', model_path=None, confidence=.5):
+    def start(self, mode, message, unit, camera_config=None, human_backend='hog', model_path=None, confidence=.5, signal_protocol='morse'):
+        if signal_protocol not in ('morse', 'blink'):
+            raise ValueError('Choose morse or blink signal protocol')
+        if signal_protocol == 'blink':
+            message = 'RTH'
         if not math.isfinite(unit):
             raise ValueError('Dot duration must be finite')
         protocol = Protocol(message, unit)
@@ -98,9 +105,10 @@ class VisionService:
             self.reset()
             self.stop_event.clear()
             self.data.update(running=True, source=mode)
+            self.data['signal_protocol'] = signal_protocol
             self.data['human_detector'] = 'YOLO person detector' if human_backend == 'yolo' else 'OpenCV HOG (experimental)'
             self.event('session', f'{mode} session started')
-            self.thread = threading.Thread(target=self._run, args=(mode, protocol, settings, human_backend, model_path, confidence), daemon=True)
+            self.thread = threading.Thread(target=self._run, args=(mode, protocol, settings, human_backend, model_path, confidence, signal_protocol), daemon=True)
             self.thread.start()
 
     def stop(self):
@@ -113,13 +121,14 @@ class VisionService:
             if not self.data['running']:
                 self.jpeg = None
 
-    def _run(self, mode, protocol, settings, human_backend='hog', model_path=None, confidence=.5):
+    def _run(self, mode, protocol, settings, human_backend='hog', model_path=None, confidence=.5, signal_protocol='morse'):
         source = None
         people = None
         try:
-            decoder, validator = MorseDecoder(protocol), SignalValidator(protocol)
+            decoder = BlinkDecoder(protocol) if signal_protocol == 'blink' else MorseDecoder(protocol)
+            validator = SignalValidator(protocol)
             if mode == 'simulation':
-                source = simulate(protocol.message, protocol.unit, protocol.confirmations)
+                source = simulate_blink(protocol.unit) if signal_protocol == 'blink' else simulate(protocol.message, protocol.unit, protocol.confirmations)
             else:
                 import cv2
                 from ir.ir_camera_receiver import receive
@@ -173,6 +182,9 @@ class VisionService:
                                          confirmations=validator.count,
                                          beacon_confirmed=accepted or validator.latched)
                         self.event('beacon', f'{decoded[0]}: {reason}')
+                        if accepted:
+                            self.data['request'] = 'RTH request received; flight control integration pending'
+                            self.event('request', self.data['request'])
                     if state is None:
                         self.data['beacon_confirmed'] = False
                     count = self.data['humans']
