@@ -24,6 +24,7 @@ class StartRequest(BaseModel):
     model_path: str | None = None
     confidence: float = .5
     signal_protocol: str = 'morse'
+    task: str = 'both'
 
 
 @router.get('/vision', response_class=HTMLResponse)

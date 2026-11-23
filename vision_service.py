@@ -24,7 +24,7 @@ class VisionService:
         self.reset()
 
     def reset(self):
-        self.data = dict(running=False, source='none', error=None, updated=None,
+        self.data = dict(running=False, source='none', task='both', error=None, updated=None,
                          humans=None, human_detector='OpenCV HOG (experimental)',
                          ir_state=None, quality=0, centroid=None, message=None,
                          validation='waiting', confirmations=0, beacon_confirmed=False,
@@ -42,7 +42,7 @@ class VisionService:
         with self.lock:
             result = copy.deepcopy(self.data)
             result['events'] = list(self.events)
-        result['ir_disabled'] = result['source'] == 'human-camera' and not result['ir_enabled']
+        result['ir_disabled'] = result['task'] == 'human' or (result['source'] == 'human-camera' and not result['ir_enabled'])
         age = None if result['updated'] is None else time.monotonic() - result['updated']
         result['age_seconds'] = age
         result['fresh'] = bool(result['running'] and age is not None and age < 2)
@@ -60,7 +60,7 @@ class VisionService:
             result['request'] = 'waiting for current beacon confirmation'
         return result
 
-    def start(self, mode, message, unit, camera_config=None, human_backend='hog', model_path=None, confidence=.5, signal_protocol='morse'):
+    def start(self, mode, message, unit, camera_config=None, human_backend='hog', model_path=None, confidence=.5, signal_protocol='morse', task='both'):
         if signal_protocol not in ('morse', 'blink'):
             raise ValueError('Choose morse or blink signal protocol')
         if signal_protocol == 'blink':
@@ -70,13 +70,17 @@ class VisionService:
         protocol = Protocol(message, unit)
         if mode not in ('simulation', 'camera', 'human-camera'):
             raise ValueError('Choose simulation, camera or human-camera')
+        if task not in ('human', 'ir', 'both'):
+            raise ValueError('Choose human, ir or both camera tasks')
+        if mode == 'simulation' and task == 'human':
+            raise ValueError('Human detection requires a live camera')
         if human_backend not in ('hog', 'yolo') or not math.isfinite(confidence) or not 0 < confidence <= 1:
             raise ValueError('Choose hog or yolo and confidence between 0 and 1')
         if model_path:
             model_path = str(Path(model_path).expanduser().resolve())
         elif (Path(__file__).resolve().parent / 'yolo11n.pt').is_file():
             model_path = str(Path(__file__).resolve().parent / 'yolo11n.pt')
-        if mode != 'simulation' and human_backend == 'yolo' and (not model_path or not Path(model_path).is_file()):
+        if mode != 'simulation' and task in ('human', 'both') and human_backend == 'yolo' and (not model_path or not Path(model_path).is_file()):
             raise ValueError('Provide a local YOLO model path')
         settings = None
         if mode in ('camera', 'human-camera') and camera_config:
@@ -98,19 +102,19 @@ class VisionService:
                 ) from exc
             from ir.ir_camera_receiver import validate_settings
             validate_settings(settings)
-        elif mode == 'camera':
+        elif mode == 'camera' or (mode == 'human-camera' and task in ('ir', 'both')):
             raise ValueError('Provide a measured camera configuration file')
         with self.lock:
             if self.thread and self.thread.is_alive():
                 raise ValueError('Stop the current session before starting another')
             self.reset()
             self.stop_event.clear()
-            self.data.update(running=True, source=mode)
-            self.data['ir_enabled'] = mode != 'simulation' and settings is not None
+            self.data.update(running=True, source=mode, task=task)
+            self.data['ir_enabled'] = mode != 'simulation' and task in ('ir', 'both') and settings is not None
             self.data['signal_protocol'] = signal_protocol
-            self.data['human_detector'] = 'YOLO person detector' if human_backend == 'yolo' else 'OpenCV HOG (experimental)'
+            self.data['human_detector'] = ('YOLO person detector' if human_backend == 'yolo' else 'OpenCV HOG (experimental)') if task in ('human', 'both') else 'Disabled'
             self.event('session', f'{mode} session started')
-            self.thread = threading.Thread(target=self._run, args=(mode, protocol, settings, human_backend, model_path, confidence, signal_protocol), daemon=True)
+            self.thread = threading.Thread(target=self._run, args=(mode, protocol, settings, human_backend, model_path, confidence, signal_protocol, task), daemon=True)
             self.thread.start()
 
     def stop(self):
@@ -123,7 +127,7 @@ class VisionService:
             if not self.data['running']:
                 self.jpeg = None
 
-    def _run(self, mode, protocol, settings, human_backend='hog', model_path=None, confidence=.5, signal_protocol='morse'):
+    def _run(self, mode, protocol, settings, human_backend='hog', model_path=None, confidence=.5, signal_protocol='morse', task='both'):
         source = None
         people = None
         try:
@@ -134,16 +138,20 @@ class VisionService:
             else:
                 import cv2
                 from ir.ir_camera_receiver import receive
-                people = PersonWorker(human_backend, model_path, confidence)
+                if task in ('human', 'both'):
+                    people = PersonWorker(human_backend, model_path, confidence)
 
                 def on_frame(frame, observation):
                     # Picamera2 RGB888 arrays use OpenCV's BGR byte ordering.
-                    people.submit(frame)
-                    human = people.snapshot()
+                    if people is not None:
+                        people.submit(frame)
+                        human = people.snapshot()
+                    else:
+                        human = {'human_updated': None, 'human_error': None, 'detections': []}
                     stamp = human['human_updated']
                     fresh = stamp is not None and time.monotonic() - stamp < 2 and not human['human_error']
                     boxes = [row['box'] for row in human['detections']] if fresh else []
-                    count = len(boxes) if fresh else None
+                    count = (len(boxes) if fresh else None) if people is not None else None
                     display = frame.copy()
                     for x, y, w, h in boxes:
                         cv2.rectangle(display, (int(x), int(y)), (int(x+w), int(y+h)), (0, 180, 255), 2)
@@ -164,7 +172,7 @@ class VisionService:
                                          frames=self.data['frames'] + 1)
 
                 source = receive(settings, on_frame=on_frame, stop_event=self.stop_event,
-                                 preview=False, human_only=(mode == 'human-camera' and settings is None))
+                                 preview=False, human_only=(task == 'human' and settings is None))
             previous = None
             for timestamp, state, quality in source:
                 if mode == 'simulation' and previous is not None:
