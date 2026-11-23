@@ -30,7 +30,7 @@ class VisionService:
                          validation='waiting', confirmations=0, beacon_confirmed=False,
                          landing='BLOCKED: landing geometry unvalidated',
                          transmission_enabled=False, boxes=[], frames=0,
-                         human_updated=None, human_error=None, signal_protocol='morse', request='waiting')
+                         human_updated=None, human_error=None, signal_protocol='morse', request='waiting', ir_enabled=False)
         self.events = deque(maxlen=100)
         self.jpeg = None
 
@@ -42,6 +42,7 @@ class VisionService:
         with self.lock:
             result = copy.deepcopy(self.data)
             result['events'] = list(self.events)
+        result['ir_disabled'] = result['source'] == 'human-camera' and not result['ir_enabled']
         age = None if result['updated'] is None else time.monotonic() - result['updated']
         result['age_seconds'] = age
         result['fresh'] = bool(result['running'] and age is not None and age < 2)
@@ -78,9 +79,7 @@ class VisionService:
         if mode != 'simulation' and human_backend == 'yolo' and (not model_path or not Path(model_path).is_file()):
             raise ValueError('Provide a local YOLO model path')
         settings = None
-        if mode == 'camera':
-            if not camera_config:
-                raise ValueError('Provide a measured camera configuration file')
+        if mode in ('camera', 'human-camera') and camera_config:
             config_path = Path(camera_config).expanduser().resolve()
             try:
                 config_text = config_path.read_text(encoding='utf-8-sig')
@@ -99,12 +98,15 @@ class VisionService:
                 ) from exc
             from ir.ir_camera_receiver import validate_settings
             validate_settings(settings)
+        elif mode == 'camera':
+            raise ValueError('Provide a measured camera configuration file')
         with self.lock:
             if self.thread and self.thread.is_alive():
                 raise ValueError('Stop the current session before starting another')
             self.reset()
             self.stop_event.clear()
             self.data.update(running=True, source=mode)
+            self.data['ir_enabled'] = mode != 'simulation' and settings is not None
             self.data['signal_protocol'] = signal_protocol
             self.data['human_detector'] = 'YOLO person detector' if human_backend == 'yolo' else 'OpenCV HOG (experimental)'
             self.event('session', f'{mode} session started')
@@ -162,7 +164,7 @@ class VisionService:
                                          frames=self.data['frames'] + 1)
 
                 source = receive(settings, on_frame=on_frame, stop_event=self.stop_event,
-                                 preview=False, human_only=mode == 'human-camera')
+                                 preview=False, human_only=(mode == 'human-camera' and settings is None))
             previous = None
             for timestamp, state, quality in source:
                 if mode == 'simulation' and previous is not None:
