@@ -1,5 +1,6 @@
 """Human / IR routes hosted by the launcher, independent of serial modules."""
 import sys
+from html import escape
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -19,11 +20,19 @@ class StartRequest(BaseModel):
     message: str
     unit: float
     camera_config: str | None = None
+    human_backend: str = 'hog'
+    model_path: str | None = None
+    confidence: float = .5
 
 
 @router.get('/vision', response_class=HTMLResponse)
+@router.get('/base-station', response_class=HTMLResponse)
 def page():
-    return Path(__file__).with_name('vision.html').read_text(encoding='utf-8')
+    html = Path(__file__).with_name('vision.html').read_text(encoding='utf-8')
+    model = ROOT / 'yolo11n.pt'
+    if model.is_file():
+        html = html.replace('<input id="model"', f'<input id="model" value="{escape(str(model), quote=True)}"')
+    return HTMLResponse(html, headers={'Cache-Control': 'no-store'})
 
 
 @router.get('/api/vision/status')
